@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "Every image this repository publishes. Fields:",
+    "",
+    "kind              build: compile from source. mirror: copy an image upstream publishes.",
+    "repo              upstream git repository (build only).",
+    "ref               branch name, or \"semver-tag\" for the highest vX.Y.Z tag (build only).",
+    "dockerfile        path in the upstream repository; the repository is the build context.",
+    "local_dockerfile  path in this repository; the build context is empty and the Dockerfile clones",
+    "                  the source using the UPSTREAM_REF and UPSTREAM_SHA build args.",
+    "inputs            upstream paths that affect the image. Changes elsewhere do not cause a rebuild.",
+    "cargo_closure     crate name. Adds that crate and its workspace path dependencies to inputs, and",
+    "                  hashes the Cargo.lock entries they reach.",
+    "recipe            increment to force a rebuild.",
+    "source_image      image to copy (mirror only).",
+    "gated             true: send consumers a repository_dispatch for each new image. false: send nothing."
+  ],
+  "registry": "ghcr.io/happyproto/pds-test",
+  "consumers": [
+    "gamesgamesgamesgamesgames/happyview"
+  ],
+  "targets": {
+    "plc": {
+      "kind": "build",
+      "repo": "https://github.com/did-method-plc/did-method-plc.git",
+      "ref": "main",
+      "dockerfile": "packages/server/Dockerfile",
+      "inputs": [
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        ".npmrc",
+        "tsconfig.json",
+        "packages/lib",
+        "packages/server"
+      ],
+      "recipe": 1,
+      "gated": false
+    },
+    "tranquil": {
+      "kind": "build",
+      "_why": "Upstream publishes no image built with the native-tls-roots feature. See dockerfiles/tranquil-pds.Dockerfile.",
+      "repo": "https://tangled.org/tranquil.farm/tranquil-pds",
+      "ref": "semver-tag",
+      "local_dockerfile": "dockerfiles/tranquil-pds.Dockerfile",
+      "inputs": [
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        ".config",
+        ".sqlx",
+        "migrations",
+        "frontend"
+      ],
+      "cargo_closure": "tranquil-server",
+      "recipe": 1,
+      "gated": false
+    },
+    "zds": {
+      "kind": "build",
+      "repo": "https://tangled.org/zat.dev/zds",
+      "ref": "main",
+      "dockerfile": "Dockerfile",
+      "inputs": [
+        "Dockerfile",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tools",
+        "bench"
+      ],
+      "recipe": 1,
+      "gated": true
+    },
+    "pdsjs": {
+      "kind": "build",
+      "repo": "https://tangled.org/chadtmiller.com/pds.js",
+      "ref": "main",
+      "dockerfile": "Dockerfile",
+      "inputs": [
+        "Dockerfile",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "docker",
+        "packages",
+        "examples"
+      ],
+      "recipe": 1,
+      "gated": true
+    },
+    "atproto-pds": {
+      "kind": "build",
+      "repo": "https://tangled.org/ngerakines.me/atproto-crates",
+      "ref": "main",
+      "dockerfile": "Dockerfile.pds",
+      "inputs": [
+        "Dockerfile.pds",
+        "Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "cargo_closure": "atproto-pds",
+      "recipe": 1,
+      "gated": true
+    },
+    "pds-spaces-alpha": {
+      "kind": "mirror",
+      "_why": "Bluesky publishes this image for amd64 only. Mirroring it gives consumers the same repository_dispatch as built targets.",
+      "source_image": "ghcr.io/bluesky-social/atproto:pds-spaces-alpha",
+      "recipe": 1,
+      "gated": true
+    }
+  }
+}

@@ -1,0 +1,65 @@
+name: Nightly images
+
+on:
+  schedule:
+    # 05:17 UTC
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Comma-separated targets to run (blank for all)"
+        type: string
+        default: ""
+      rebuild:
+        description: "Rebuild and re-notify even when an image with the same fingerprint exists"
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Choose targets
+        id: plan
+        env:
+          WANTED: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          all="$(jq -c '.targets | keys' targets.json)"
+          if [ -z "${WANTED:-}" ]; then
+            echo "targets=$all" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          wanted="$(jq -cn --arg w "$WANTED" '$w | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))')"
+          unknown="$(jq -cn --argjson all "$all" --argjson wanted "$wanted" '$wanted - $all')"
+          if [ "$unknown" != "[]" ]; then
+            echo "unknown targets: $unknown (known: $all)" >&2
+            exit 1
+          fi
+          echo "targets=$wanted" >>"$GITHUB_OUTPUT"
+
+  image:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      target: ${{ matrix.target }}
+      rebuild: ${{ inputs.rebuild || false }}
+    secrets: inherit

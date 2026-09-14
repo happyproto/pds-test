@@ -1,0 +1,338 @@
+name: Image
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      rebuild:
+        type: boolean
+        default: false
+    secrets:
+      CONSUMER_DISPATCH_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      kind: ${{ steps.target.outputs.kind }}
+      image: ${{ steps.target.outputs.image }}
+      gated: ${{ steps.target.outputs.gated }}
+      repo: ${{ steps.target.outputs.repo }}
+      dockerfile: ${{ steps.target.outputs.dockerfile }}
+      local_dockerfile: ${{ steps.target.outputs.local_dockerfile }}
+      source_image: ${{ steps.target.outputs.source_image }}
+      fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
+      upstream: ${{ steps.fingerprint.outputs.upstream }}
+      ref: ${{ steps.fingerprint.outputs.ref }}
+      fetch: ${{ steps.fingerprint.outputs.fetch }}
+      needed: ${{ steps.exists.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Read target
+        id: target
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          jq -r --arg t "$TARGET" '
+            .registry as $registry
+            | .targets[$t]
+            | "kind=\(.kind)",
+              "image=\($registry)/\($t)",
+              "gated=\(.gated // false)",
+              "repo=\(.repo // "")",
+              "dockerfile=\(.dockerfile // "")",
+              "local_dockerfile=\(.local_dockerfile // "")",
+              "source_image=\(.source_image // "")"
+          ' targets.json >>"$GITHUB_OUTPUT"
+
+      - name: Fingerprint
+        id: fingerprint
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          # Retried because tangled.org sometimes answers 429 Too Many Requests.
+          for attempt in 1 2 3; do
+            if out="$(scripts/fingerprint.sh "$TARGET")"; then
+              printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "fingerprint attempt $attempt failed" >&2
+            [ "$attempt" = 3 ] || sleep $((attempt * 60))
+          done
+          exit 1
+
+      - name: Check for an existing image
+        id: exists
+        env:
+          REF: ${{ steps.target.outputs.image }}:fp-${{ steps.fingerprint.outputs.fingerprint }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          set -uo pipefail
+          status=0
+          out="$(docker buildx imagetools inspect "$REF" 2>&1)" || status=$?
+          if [ "$status" -eq 0 ]; then
+            if [ "$REBUILD" = true ]; then
+              echo "$REF exists; rebuilding because rebuild is true."
+              echo "needed=true" >>"$GITHUB_OUTPUT"
+            else
+              echo "needed=false" >>"$GITHUB_OUTPUT"
+              echo "### ${{ inputs.target }}: no change" >>"$GITHUB_STEP_SUMMARY"
+              echo "\`$REF\` already exists." >>"$GITHUB_STEP_SUMMARY"
+            fi
+          elif printf '%s' "$out" | grep -qiE 'not found|manifest unknown|no such manifest|404'; then
+            echo "$REF does not exist; it will be built."
+            echo "needed=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "Could not check whether $REF exists:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true' && needs.resolve.outputs.kind == 'build'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+          - arch: arm64
+            runner: ${{ vars.RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
+      REPO: ${{ needs.resolve.outputs.repo }}
+      UPSTREAM: ${{ needs.resolve.outputs.upstream }}
+      UPSTREAM_REF: ${{ needs.resolve.outputs.ref }}
+      FETCH: ${{ needs.resolve.outputs.fetch }}
+      DOCKERFILE: ${{ needs.resolve.outputs.dockerfile }}
+      LOCAL_DOCKERFILE: ${{ needs.resolve.outputs.local_dockerfile }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch upstream source
+        if: env.DOCKERFILE != ''
+        run: |
+          set -euo pipefail
+          git init --quiet upstream
+          for attempt in 1 2 3; do
+            git -C upstream fetch --quiet --depth 1 "$REPO" "$FETCH" && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep $((attempt * 60))
+          done
+          actual="$(git -C upstream rev-parse 'FETCH_HEAD^{commit}')"
+          if [ "$actual" != "$UPSTREAM" ]; then
+            echo "$UPSTREAM_REF now points at $actual, not the fingerprinted $UPSTREAM." >&2
+            exit 1
+          fi
+          git -C upstream checkout --quiet "$actual"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: crazy-max/ghaction-github-runtime@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          if [ -n "$LOCAL_DOCKERFILE" ]; then
+            mkdir -p empty-context
+            file="$LOCAL_DOCKERFILE"
+            context=empty-context
+          else
+            file="upstream/$DOCKERFILE"
+            context=upstream
+          fi
+
+          for attempt in 1 2 3; do
+            if docker buildx build \
+                --platform "linux/$ARCH" \
+                --file "$file" \
+                --build-arg "UPSTREAM_REF=$UPSTREAM_REF" \
+                --build-arg "UPSTREAM_SHA=$UPSTREAM" \
+                --label "org.opencontainers.image.source=$REPO" \
+                --label "org.opencontainers.image.revision=$UPSTREAM" \
+                --cache-from "type=gha,scope=$TARGET-$ARCH" \
+                --cache-to "type=gha,scope=$TARGET-$ARCH,mode=max,ignore-error=true" \
+                --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+                --metadata-file metadata.json \
+                "$context"; then
+              break
+            fi
+            [ "$attempt" = 3 ] && exit 1
+            echo "build attempt $attempt failed; retrying" >&2
+            sleep $((attempt * 120))
+          done
+
+          digest="$(jq -er '."containerimage.digest"' metadata.json)"
+          mkdir -p digests
+          touch "digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ inputs.target }}-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [resolve, build]
+    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: digests
+          pattern: digests-${{ inputs.target }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the manifest
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          FINGERPRINT: ${{ needs.resolve.outputs.fingerprint }}
+          UPSTREAM: ${{ needs.resolve.outputs.upstream }}
+        run: |
+          set -euo pipefail
+          refs=()
+          for f in digests/*; do refs+=("$IMAGE@sha256:$(basename "$f")"); done
+          if [ "${#refs[@]}" -ne 2 ]; then
+            echo "expected a digest per architecture, got ${#refs[@]}" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --tag "$IMAGE:fp-$FINGERPRINT" \
+            --tag "$IMAGE:upstream-${UPSTREAM:0:12}" \
+            --tag "$IMAGE:latest" \
+            "${refs[@]}"
+          docker buildx imagetools inspect "$IMAGE:fp-$FINGERPRINT"
+
+  mirror:
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true' && needs.resolve.outputs.kind == 'mirror'
+    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy the image
+        env:
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          SOURCE: ${{ needs.resolve.outputs.source_image }}
+          FINGERPRINT: ${{ needs.resolve.outputs.fingerprint }}
+          DIGEST: ${{ needs.resolve.outputs.upstream }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "$IMAGE:fp-$FINGERPRINT" \
+            --tag "$IMAGE:latest" \
+            "${SOURCE%%:*}@$DIGEST"
+
+  notify:
+    needs: [resolve, merge, mirror]
+    if: >-
+      always()
+      && needs.resolve.outputs.gated == 'true'
+      && (needs.merge.result == 'success' || needs.mirror.result == 'success')
+    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify consumers
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+          TARGET: ${{ inputs.target }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          FINGERPRINT: ${{ needs.resolve.outputs.fingerprint }}
+          UPSTREAM: ${{ needs.resolve.outputs.upstream }}
+          UPSTREAM_REF: ${{ needs.resolve.outputs.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "CONSUMER_DISPATCH_TOKEN is not set, so consumers cannot be notified of $IMAGE:fp-$FINGERPRINT." >&2
+            exit 1
+          fi
+          raw="$(docker buildx imagetools inspect --raw "$IMAGE:fp-$FINGERPRINT")"
+          digest="$(printf '%s' "$raw" | sha256sum)"
+          pinned="$IMAGE@sha256:${digest%% *}"
+
+          jq -r '.consumers[]' targets.json | while IFS= read -r consumer; do
+            jq -n \
+              --arg target "$TARGET" \
+              --arg image "$pinned" \
+              --arg fingerprint "$FINGERPRINT" \
+              --arg upstream "$UPSTREAM" \
+              --arg ref "$UPSTREAM_REF" \
+              --arg run "$RUN_URL" \
+              '{event_type: "pds-test-image",
+                client_payload: {target: $target, image: $image, fingerprint: $fingerprint,
+                                 upstream: $upstream, ref: $ref, run: $run}}' \
+              | gh api "repos/$consumer/dispatches" --input -
+            echo "notified $consumer of $pinned"
+          done
