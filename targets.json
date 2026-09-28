@@ -55,6 +55,32 @@
       "recipe": 1,
       "gated": false
     },
+    "cocoon": {
+      "kind": "build",
+      "repo": "https://github.com/haileyok/cocoon.git",
+      "ref": "main",
+      "dockerfile": "Dockerfile",
+      "inputs": [
+        "Dockerfile",
+        "go.mod",
+        "go.sum",
+        "test.go",
+        "init-keys.sh",
+        "create-initial-invite.sh",
+        "cmd",
+        "identity",
+        "internal",
+        "metrics",
+        "models",
+        "oauth",
+        "plc",
+        "recording_blockstore",
+        "server",
+        "sqlite_blockstore"
+      ],
+      "recipe": 1,
+      "gated": false
+    },
     "zds": {
       "kind": "build",
       "repo": "https://tangled.org/zat.dev/zds",

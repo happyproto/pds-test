@@ -7,6 +7,7 @@ nightly for testing.
 |---|---|---|---|
 | `plc` | did-method-plc | `main` | no |
 | `tranquil` | tranquil-pds, with `native-tls-roots` | highest `vX.Y.Z` tag | no |
+| `cocoon` | haileyok/cocoon | `main` | no |
 | `zds` | zat.dev/zds | `main` | yes |
 | `pdsjs` | chadtmiller.com/pds.js | `main` | yes |
 | `atproto-pds` | ngerakines.me/atproto-crates | `main` | yes |
