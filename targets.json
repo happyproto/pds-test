@@ -128,6 +128,26 @@
       "recipe": 1,
       "gated": true
     },
+    "vlpds": {
+      "kind": "build",
+      "repo": "https://github.com/jazware/vlpds.git",
+      "ref": "main",
+      "dockerfile": "Dockerfile",
+      "inputs": [
+        "Dockerfile",
+        ".dockerignore",
+        "rust-toolchain.toml",
+        "Cargo.toml",
+        "Cargo.lock",
+        "src",
+        "lexicons",
+        "bench/obs/grafana/dashboards",
+        "ui",
+        "docs"
+      ],
+      "recipe": 1,
+      "gated": true
+    },
     "pds-spaces-alpha": {
       "kind": "mirror",
       "_why": "Bluesky publishes this image for amd64 only. Mirroring it gives consumers the same repository_dispatch as built targets.",

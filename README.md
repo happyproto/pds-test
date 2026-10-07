@@ -11,6 +11,7 @@ nightly for testing.
 | `zds` | zat.dev/zds | `main` | yes |
 | `pdsjs` | chadtmiller.com/pds.js | `main` | yes |
 | `atproto-pds` | ngerakines.me/atproto-crates | `main` | yes |
+| `vlpds` | jazware/vlpds | `main` | yes |
 | `pds-spaces-alpha` | Bluesky's `pds-spaces-alpha` image | its tag | yes |
 
 Images are published to `ghcr.io/happyproto/pds-test/<target>` for amd64 and
