@@ -17,7 +17,8 @@
   ],
   "registry": "ghcr.io/happyproto/pds-test",
   "consumers": [
-    "gamesgamesgamesgamesgames/happyview"
+    "gamesgamesgamesgamesgames/happyview",
+    "happyproto/spaces-conformance"
   ],
   "targets": {
     "plc": {
