@@ -88,5 +88,3 @@ If the upstream image is missing something consumers need, add a Dockerfile to
 - **Package visibility**: GitHub creates each package as private. Make each
   `pds-test/<target>` package public after its first publish, so repositories in
   other organizations can pull it.
-- **`RUNNER_AMD64`, `RUNNER_ARM64`** (variables, optional): runner labels.
-  Defaults are `ubuntu-24.04` and `ubuntu-24.04-arm`.
