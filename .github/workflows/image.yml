@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   resolve:
-    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
@@ -123,9 +123,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+            runner: ubuntu-24.04
           - arch: arm64
-            runner: ${{ vars.RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -216,7 +216,7 @@ jobs:
 
   merge:
     needs: [resolve, build]
-    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
     steps:
@@ -257,7 +257,7 @@ jobs:
   mirror:
     needs: resolve
     if: needs.resolve.outputs.needed == 'true' && needs.resolve.outputs.kind == 'mirror'
-    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
     steps:
@@ -288,7 +288,7 @@ jobs:
       always()
       && needs.resolve.outputs.gated == 'true'
       && (needs.merge.result == 'success' || needs.mirror.result == 'success')
-    runs-on: ${{ vars.RUNNER_AMD64 || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
